@@ -100,6 +100,12 @@ struct SensorPublisher
     typename rclcpp::Publisher<T>::SharedPtr publisher;
 };
 
+struct Target
+{
+    rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr publisher;
+    msr::airlib::Pose pose;//geometry_msgs::msg::PoseStamped pose;
+};
+
 class AirsimROSWrapper
 {
     using AirSimSettings = msr::airlib::AirSimSettings;
@@ -215,8 +221,11 @@ private:
 
     // state, returns the simulation timestamp best guess based on drone state timestamp, airsim needs to return timestap for environment
     rclcpp::Time update_state();
+    void update_target_state();
     void update_and_publish_static_transforms(VehicleROS* vehicle_ros);
     void publish_vehicle_state();
+    void publish_target_pose();
+    void broadcast_target_tf();
 
     /// ROS service callbacks
     bool takeoff_srv_cb(const std::shared_ptr<airsim_interfaces::srv::Takeoff::Request> request, const std::shared_ptr<airsim_interfaces::srv::Takeoff::Response> response, const std::string& vehicle_name);
@@ -304,10 +313,12 @@ private:
 
     AirSimSettingsParser airsim_settings_parser_;
     std::unordered_map<std::string, std::unique_ptr<VehicleROS>> vehicle_name_ptr_map_;
+    std::unordered_map<std::string, std::unique_ptr<Target>> unreal_object_ptr_map_;
     static const std::unordered_map<int, std::string> image_type_int_to_string_map_;
 
     bool is_vulkan_; // rosparam obtained from launch file. If vulkan is being used, we BGR encoding instead of RGB
 
+    std::vector<std::string> unreal_object_ids_;
     std::string host_ip_;
     std::unique_ptr<msr::airlib::RpcLibClientBase> airsim_client_;
     // seperate busy connections to airsim, update in their own thread

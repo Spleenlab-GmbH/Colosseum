@@ -95,6 +95,16 @@ void AirsimROSWrapper::initialize_ros()
     // ros params
     double update_airsim_control_every_n_sec;
     nh_->get_parameter("is_vulkan", is_vulkan_);
+    nh_->get_parameter_or("unreal_object_ids", unreal_object_ids_, unreal_object_ids_);
+    //log targets
+    for (const auto& target_name : unreal_object_ids_) {
+        RCLCPP_INFO(nh_->get_logger(), "airsim_node_target: %s", target_name.c_str());
+        std::unique_ptr<Target> tgt = std::unique_ptr<Target>(new Target());
+        //create pose publisher of type <geometry_msgs::msg::PoseStamped>
+        tgt->publisher = nh_->create_publisher<geometry_msgs::msg::PoseStamped>(target_name + "/pose", 10);
+        tgt->pose=msr::airlib::Pose();
+        unreal_object_ptr_map_.emplace(target_name, std::move(tgt));
+    }
     nh_->get_parameter("update_airsim_control_every_n_sec", update_airsim_control_every_n_sec);
     nh_->get_parameter("publish_clock", publish_clock_);
     nh_->get_parameter_or("world_frame_id", world_frame_id_, world_frame_id_);
@@ -923,6 +933,8 @@ void AirsimROSWrapper::drone_state_timer_cb()
 
         // publish vehicle state, odom, and all basic sensor types
         publish_vehicle_state();
+        publish_target_pose();
+        broadcast_target_tf();
 
         // send any commands out to the vehicles
         update_commands();
@@ -951,7 +963,7 @@ rclcpp::Time AirsimROSWrapper::update_state()
     //should be easier way to get the sim time through API, something like:
     //msr::airlib::Environment::State env = airsim_client_->simGetGroundTruthEnvironment("");
     //curr_ros_time = rclcpp::Time(env.clock().nowNanos());
-
+    update_target_state();
     // iterate over drones
     for (auto& vehicle_name_ptr_pair : vehicle_name_ptr_map_) {
         rclcpp::Time vehicle_time;
@@ -1013,6 +1025,65 @@ rclcpp::Time AirsimROSWrapper::update_state()
 
     return curr_ros_time;
 }
+
+void AirsimROSWrapper::update_target_state()
+{
+    //print pose for each target in unreal_object_ids_
+    for(int i = 0; i < unreal_object_ids_.size(); i++)
+    {
+        msr::airlib::Pose target_pose = airsim_client_->simGetObjectPose(unreal_object_ids_[i]);
+        //fill target_name_ptr_pair with new pose
+        unreal_object_ptr_map_[unreal_object_ids_[i]]->pose = target_pose;
+        //log new pose
+        RCLCPP_INFO(nh_->get_logger(), "Target %s pose: %f %f %f", unreal_object_ids_[i].c_str(), target_pose.position.x(), target_pose.position.y(), target_pose.position.z());
+    }
+}
+
+void AirsimROSWrapper::broadcast_target_tf()
+{
+    for(std::size_t i = 0; i < unreal_object_ids_.size(); ++i)
+    {
+        //create a new transform message
+        geometry_msgs::msg::TransformStamped transformStamped;
+        transformStamped.header.frame_id = world_frame_id_;
+        transformStamped.header.stamp = nh_->now();
+        transformStamped.child_frame_id = unreal_object_ids_[i];
+        transformStamped.transform.translation.x = unreal_object_ptr_map_[unreal_object_ids_[i]]->pose.position.x();
+        transformStamped.transform.translation.y = unreal_object_ptr_map_[unreal_object_ids_[i]]->pose.position.y();
+        transformStamped.transform.translation.z = unreal_object_ptr_map_[unreal_object_ids_[i]]->pose.position.z();
+        transformStamped.transform.rotation.x = unreal_object_ptr_map_[unreal_object_ids_[i]]->pose.orientation.x();
+        transformStamped.transform.rotation.y = unreal_object_ptr_map_[unreal_object_ids_[i]]->pose.orientation.y();
+        transformStamped.transform.rotation.z = unreal_object_ptr_map_[unreal_object_ids_[i]]->pose.orientation.z();
+        transformStamped.transform.rotation.w = unreal_object_ptr_map_[unreal_object_ids_[i]]->pose.orientation.w();
+        //publish transform message
+        tf_broadcaster_->sendTransform(transformStamped);
+    }
+}
+
+void AirsimROSWrapper::publish_target_pose()
+{
+
+    //for (const auto& target_name_ptr_pair : unreal_object_ptr_map_) {
+    //    const Target& target = target_name_ptr_pair.second; 
+
+    for(std::size_t i = 0; i < unreal_object_ids_.size(); ++i)
+    {
+        const Target& target = *unreal_object_ptr_map_[unreal_object_ids_[i]];
+        //create a new pose message 
+        geometry_msgs::msg::PoseStamped pose_msg;
+        pose_msg.header.frame_id = world_frame_id_;
+        pose_msg.header.stamp = nh_->now();
+        pose_msg.pose.position.x = target.pose.position.x();
+        pose_msg.pose.position.y = target.pose.position.y();
+        pose_msg.pose.position.z = target.pose.position.z();
+        pose_msg.pose.orientation.x = target.pose.orientation.x();
+        pose_msg.pose.orientation.y = target.pose.orientation.y();
+        pose_msg.pose.orientation.z = target.pose.orientation.z();
+        pose_msg.pose.orientation.w = target.pose.orientation.w();
+        //publish pose message
+        target.publisher->publish(pose_msg);
+    }
+} 
 
 void AirsimROSWrapper::publish_vehicle_state()
 {
